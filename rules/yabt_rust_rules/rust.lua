@@ -36,25 +36,22 @@ local function collect_dependencies(toolchain, deps)
         table.insert(lib_queue, dep:rust_library(toolchain))
     end
 
+    ---@type table<string, boolean>
     local handled = {}
-
     while #lib_queue > 0 do
         ---@type Library
         local lib = table.remove(lib_queue, 1)
 
-        if handled[lib.crate_name] then
-            goto continue
+        if not handled[lib.crate_name] then
+            handled[lib.crate_name] = true
+
+            table.insert(ninja_input_deps, lib:out_file())
+            rustflags = rustflags .. ' --extern '.. lib.crate_name .. ' -L ' .. lib.out_dir:absolute()
+
+            for _, dep in ipairs(lib.deps) do
+                table.insert(lib_queue, dep:rust_library(toolchain))
+            end
         end
-        handled[lib.crate_name] = true
-
-        table.insert(ninja_input_deps, lib:out_file())
-        rustflags = rustflags .. ' --extern '.. lib.crate_name .. ' -L ' .. lib.out_dir:absolute()
-
-        for _, dep in ipairs(lib.deps) do
-            table.insert(lib_queue, dep:rust_library(toolchain))
-        end
-
-        ::continue::
     end
 
     return ninja_input_deps, rustflags
@@ -68,7 +65,7 @@ end
 ---@field out_dir OutPath
 ---@field src Path
 ---@field deps ?Dep[]
----@field edition string
+---@field edition ?string        Defaults to 2024
 ---@field rustflags ?string[]
 ---@field toolchain ?Toolchain
 local Library = {}
@@ -138,6 +135,7 @@ end
 
 ---@return Library
 function Library:rust_library(toolchain)
+    -- TODO: Use toolchain to generate a different lib for this toolchain. for this, the output dirs need namespacing
     return self
 end
 
@@ -146,7 +144,7 @@ end
 ---@field out_dir OutPath
 ---@field src Path
 ---@field deps Dep[]
----@field edition string
+---@field edition ?string        Defaults to 2024
 ---@field rustflags ?string[]
 ---@field toolchain ?Toolchain
 local Binary = {}
