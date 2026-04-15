@@ -25,12 +25,12 @@ local function rule_for_toolchain(toolchain, type)
     }
 end
 
----@param deps Dep[]
+---@param deps RustDep[]
 local function collect_dependencies(toolchain, deps)
     local ninja_input_deps = {}
     local rustflags = ''
 
-    ---@type Library[]
+    ---@type RustLibrary[]
     local lib_queue = {}
     for _, dep in ipairs(deps) do
         table.insert(lib_queue, dep:rust_library(toolchain))
@@ -39,7 +39,7 @@ local function collect_dependencies(toolchain, deps)
     ---@type table<string, boolean>
     local handled = {}
     while #lib_queue > 0 do
-        ---@type Library
+        ---@type RustLibrary
         local lib = table.remove(lib_queue, 1)
 
         if not handled[lib.crate_name] then
@@ -57,20 +57,20 @@ local function collect_dependencies(toolchain, deps)
     return ninja_input_deps, rustflags
 end
 
----@class Dep
----@field rust_library fun(self: Dep, toolchain: Toolchain): Library
+---@class RustDep
+---@field rust_library fun(self: RustDep, toolchain: Toolchain): RustLibrary
 
----@class Library
+---@class RustLibrary
 ---@field crate_name string
 ---@field out_dir OutPath
 ---@field src Path
----@field deps ?Dep[]
+---@field deps ?RustDep[]
 ---@field edition ?string        Defaults to 2024
 ---@field rustflags ?string[]
 ---@field toolchain ?Toolchain
 local Library = {}
 
----@param lib Library
+---@param lib RustLibrary
 function Library:new(lib)
     setmetatable(lib, self)
     self.__index = self
@@ -133,23 +133,29 @@ function Library:build(ctx)
     ctx.add_build_step_with_rule(build_step, build_rule)
 end
 
----@return Library
+---@return RustLibrary
 function Library:rust_library(toolchain)
     -- TODO: Use toolchain to generate a different lib for this toolchain. for this, the output dirs need namespacing
     return self
 end
 
----@class Binary
+---@return RustLibrary
+function Library:with_features(...)
+    -- FIXME: Implement
+    return self
+end
+
+---@class RustBinary
 ---@field crate_name string
 ---@field out_dir OutPath
 ---@field src Path
----@field deps Dep[]
+---@field deps RustDep[]
 ---@field edition ?string        Defaults to 2024
 ---@field rustflags ?string[]
 ---@field toolchain ?Toolchain
 local Binary = {}
 
----@param bin Binary
+---@param bin RustBinary
 function Binary:new(bin)
     setmetatable(bin, self)
     self.__index = self
