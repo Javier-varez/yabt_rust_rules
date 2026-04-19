@@ -17,7 +17,7 @@ local function rule_for_toolchain(toolchain, type)
         name_suffix = 'rlib'
     end
     return {
-        name = toolchain.name .. name_suffix,
+        name = toolchain.name .. '-' .. name_suffix,
         cmd = toolchain.rustc .. ' ' .. table.concat(toolchain.rustflags, ' ') ..
             '--out-dir $out_dir --edition $edition --crate-name $crate_name --crate-type ' ..
             crate_type .. ' $rustflags $src --emit dep-info,link',
@@ -29,6 +29,7 @@ end
 local function collect_dependencies(toolchain, deps)
     local ninja_input_deps = {}
     local rustflags = ''
+    local libs = {}
 
     ---@type RustLibrary[]
     local lib_queue = {}
@@ -44,9 +45,10 @@ local function collect_dependencies(toolchain, deps)
 
         if not handled[lib.crate_name] then
             handled[lib.crate_name] = true
+            table.insert(libs, lib)
 
             table.insert(ninja_input_deps, lib:out_file())
-            rustflags = rustflags .. ' --extern '.. lib.crate_name .. ' -L ' .. lib.out_dir:absolute()
+            rustflags = rustflags .. ' --extern ' .. lib.crate_name .. ' -L ' .. lib.out_dir:absolute()
 
             for _, dep in ipairs(lib.deps) do
                 table.insert(lib_queue, dep:rust_library(toolchain))
@@ -54,7 +56,7 @@ local function collect_dependencies(toolchain, deps)
         end
     end
 
-    return ninja_input_deps, rustflags
+    return ninja_input_deps, rustflags, libs
 end
 
 ---@class RustDep
@@ -67,7 +69,11 @@ end
 ---@field deps ?RustDep[]
 ---@field edition ?string        Defaults to 2024
 ---@field rustflags ?string[]
+---@field features ?string[]
+---@field default_features ?string[]
 ---@field toolchain ?Toolchain
+---@field private enabled_features ?string[]
+---@field private built ?boolean
 local Library = {}
 
 ---@param lib RustLibrary
@@ -84,6 +90,13 @@ function Library:resolve()
     self.toolchain = self.toolchain or selected_toolchain
     self.rustflags = self.rustflags or {}
     self.deps = self.deps or {}
+    self.features = self.features or {}
+    self.default_features = self.default_features or {}
+
+    self.enabled_features = self.enabled_features or {}
+    for _, feature in ipairs(self.default_features) do
+        table.insert(self.enabled_features, feature)
+    end
 
     local path = require 'yabt.core.path'
     if not path.is_out_path(self.out_dir) then
@@ -106,13 +119,24 @@ end
 
 ---@param ctx Context
 function Library:build(ctx)
+    if self.built then
+        return
+    end
+
     local out_file = self:out_file()
     local dep_file = self.out_dir:join(self.crate_name .. '.d')
-    local ninja_input_deps, rustflags = collect_dependencies(self.toolchain, self.deps)
+    local ninja_input_deps, rustflags, libs = collect_dependencies(self.toolchain, self.deps)
     table.insert(ninja_input_deps, self.src)
 
     for _, flag in ipairs(self.rustflags) do
         rustflags = rustflags .. ' ' .. flag
+    end
+    for _, feature in ipairs(self.enabled_features) do
+        rustflags = rustflags .. ' --cfg \'feature="' .. feature .. '"\''
+    end
+
+    for _, lib in ipairs(libs) do
+        lib:build(ctx)
     end
 
     local build_rule = rule_for_toolchain(self.toolchain, LIB_TYPE)
@@ -131,6 +155,8 @@ function Library:build(ctx)
         }
     }
     ctx.add_build_step_with_rule(build_step, build_rule)
+
+    self.built = true
 end
 
 ---@return RustLibrary
@@ -141,8 +167,39 @@ end
 
 ---@return RustLibrary
 function Library:with_features(...)
-    -- FIXME: Implement
-    return self
+    local has_feature = function(feature)
+        for _, cur in ipairs(self.features) do
+            if feature == cur then
+                return true
+            end
+        end
+        return false
+    end
+
+    local enabled_features = { ... }
+    for _, feature in ipairs(self.enabled_features) do
+        table.insert(enabled_features, feature)
+    end
+
+    for _, feature in ipairs(enabled_features) do
+        if not has_feature(feature) then
+            error('Unknown feature ' .. feature .. ' for crate ' .. self.crate_name, 2)
+        end
+    end
+
+    return Library:new {
+        crate_name = self.crate_name,
+        -- FIXME: out_dir should already be disambiguated with the feature set
+        out_dir = self.out_dir:with_ext('with_feats'):join(table.concat(enabled_features, '_')),
+        src = self.src,
+        deps = self.deps,
+        edition = self.edition,
+        rustflags = self.rustflags,
+        features = self.features,
+        default_features = self.default_features,
+        toolchain = self.toolchain,
+        enabled_features = enabled_features,
+    }
 end
 
 ---@class RustBinary
@@ -192,11 +249,15 @@ end
 function Binary:build(ctx)
     local out_file = self:out_file()
     local dep_file = out_file:with_ext('d')
-    local ninja_input_deps, rustflags = collect_dependencies(self.toolchain, self.deps)
+    local ninja_input_deps, rustflags, libs = collect_dependencies(self.toolchain, self.deps)
     table.insert(ninja_input_deps, self.src)
 
     for _, flag in ipairs(self.rustflags) do
         rustflags = rustflags .. ' ' .. flag
+    end
+
+    for _, lib in ipairs(libs) do
+        lib:build(ctx)
     end
 
     local build_rule = rule_for_toolchain(self.toolchain, BIN_TYPE)
